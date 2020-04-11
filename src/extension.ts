@@ -16,41 +16,28 @@ export function activate(context: vscode.ExtensionContext) {
 	let disposable = vscode.commands.registerCommand('extension.helloWorld', () => {
 		// The code you place here will be executed every time your command is executed
 
-		const selections = vscode.window.activeTextEditor?.selections;
-
-		if (!selections) {
-			console.log('No selection, returning');
+		if (!vscode.window.activeTextEditor) {
+			console.log('No active editor, returning');
 			return;
 		}
 
-		const isSingleSelection = selections.length == 1;
-		if (isSingleSelection) {
-			console.log('Only one selection found, returning');
+		const allSelections = vscode.window.activeTextEditor.selections;
+
+		// We remove selections that span multiple lines
+		const selections = allSelections.filter(selection => selection.isSingleLine);
+
+		if (selections.length == 0) {
+			console.log('No valid selections, returning');
 			return;
 		}
 
-		const log = (sels: vscode.Selection[] | undefined) => {
-			console.log(sels?.map(selection => `Ln ${selection.start.line}, Col ${selection.start.character} to Ln ${selection.end.line}, Col ${selection.end.character}`));
-		}
-		log(selections);
-
-		let min = selections[0];
-		let max = selections[0];
-
-		selections.forEach(selection => {
-			if (selection.start.isBefore(min.start)) {
-				min = selection;
-			}
-			if (selection.end.isAfter(max.end)) {
-				max = selection;
-			}
-		});
-
-		console.log({ min, max });
-
-		const region = { start: min.start, end: max.end };
-		console.log(region);
-
+		const snippetString = makeSnippetString(vscode.window.activeTextEditor.document, selections);
+		const selectionRange = getSelectionRange(selections);
+		vscode.window.activeTextEditor.edit(builder => {
+			builder.delete(selectionRange);
+		}).then(() => {
+			vscode.window.activeTextEditor?.insertSnippet(snippetString, selectionRange.start);
+		})
 	});
 
 	context.subscriptions.push(disposable);
@@ -58,3 +45,58 @@ export function activate(context: vscode.ExtensionContext) {
 
 // this method is called when your extension is deactivated
 export function deactivate() { }
+
+/* Utility Functions */
+function selectionComparator(a: vscode.Selection, b: vscode.Selection) : number {
+	if (a.start.line == b.start.line) {
+		return a.start.character - b.start.character;
+	}
+	return a.start.line - b.start.line;
+}
+
+function makeSnippetString(document: vscode.TextDocument, selections: vscode.Selection[]): vscode.SnippetString {
+	const sortedSelections = [...selections].sort(selectionComparator);
+
+	// `chunks` is text that alternates between selections and nonselections, starting with selections.
+	// It should always be an odd length (bookended by selection chunks).
+	const chunks = [];
+	let placeholderIndex = 1;
+	for (let i = 0; i < sortedSelections.length; i++) {
+		const selection = sortedSelections[i];
+		const placeholderRawText = document.getText(selection);
+		const placeholderText = makePlaceholderText(placeholderIndex++, placeholderRawText);
+		chunks.push(placeholderText);
+
+		if (i + 1 < sortedSelections.length) {
+			const nextSelection = selections[i + 1];
+			const vanillaText = document.getText(new vscode.Range(selection.end, nextSelection.start));
+			chunks.push(vanillaText);
+		}
+	}
+
+	const finalText = chunks.join("");
+
+	return new vscode.SnippetString(finalText);
+}
+
+// Format per https://code.visualstudio.com/docs/editor/userdefinedsnippets#_create-your-own-snippets
+function makePlaceholderText(index: number, rawText: string): string {
+	return '${' + index + ":" + rawText + '}';
+}
+
+function getSelectionRange(selections: vscode.Selection[]): vscode.Range {
+
+	let min = selections[0];
+	let max = selections[0];
+
+	selections.forEach(selection => {
+		if (selection.start.isBefore(min.start)) {
+			min = selection;
+		}
+		if (selection.end.isAfter(max.end)) {
+			max = selection;
+		}
+	});
+
+	return new vscode.Range(min.start, max.end);
+}
